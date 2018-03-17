@@ -38,7 +38,8 @@ public class RobotPyController : MonoBehaviour {
     [DllImport("robotpy_sim_core", CallingConvention = CallingConvention.Cdecl)]
     private static extern void set_joystick_button(int stick, int axis, bool value);
 
-    private MovementController move_ctrl; 
+    private MovementController move_ctrl;
+    public SpinningBladeController blade_ctrl;
 
     // Use this for initialization
     void Start () {
@@ -58,17 +59,21 @@ public class RobotPyController : MonoBehaviour {
     void FixedUpdate () {
         float horiz = Input.GetAxis("Horizontal");
         float vert = Input.GetAxis("Vertical");
+        float fire = Input.GetAxis("Fire1");
 
         set_joystick_axis(0, 0, horiz);
         set_joystick_axis(0, 1, vert);
+        set_joystick_button(0, 1, fire > 0.1);
 
         robot_step();
 
         double pwm_left = get_pwm_value(0);
         double pwm_right = get_pwm_value(1);
+        double pwm_blade = get_pwm_value(2);
 
         move_ctrl.left = (float)pwm_left;
         move_ctrl.right = (float)pwm_right;
+        blade_ctrl.motPwr = (float)pwm_blade;
 	}
 
     void OnDisable()
