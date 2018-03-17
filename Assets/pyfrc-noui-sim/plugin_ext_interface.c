@@ -19,7 +19,7 @@
 #endif
 
 typedef void (*logging_func_ptr)(const char*);
-logging_func_ptr logging_func;
+logging_func_ptr logging_func = NULL;
 
 void debug_log(const char* fmt, ...) {
     va_list args;
@@ -27,9 +27,11 @@ void debug_log(const char* fmt, ...) {
 
     vfprintf(stderr, fmt, args);
 
-    char buf[256];
-    vsnprintf(buf, 256, fmt, args);
-    logging_func(buf);
+    if(logging_func != NULL) {
+        char buf[256];
+        vsnprintf(buf, 256, fmt, args);
+        logging_func(buf);
+    }
 
     va_end(args);
 }
@@ -40,7 +42,9 @@ PyObject* log_interceptor_write(PyObject* self, PyObject* args) {
         return NULL;
 
     printf("%s", msg);
-    logging_func(msg);
+    if(logging_func != NULL) {
+        logging_func(msg);
+    }
 
     return Py_BuildValue("");
 }
@@ -80,20 +84,53 @@ void CALL_CONV set_logging_function(logging_func_ptr func_ptr) {
  * starts a Robot class running.
  */
 int CALL_CONV load_robot(const char* robot_file) {
+    int ret = 0;
+    PyObject *sim_core_module = NULL, *interceptor_module = NULL;
+    PyObject *robot_filename = NULL, *robot_cls = NULL;
+
+    if(Py_IsInitialized()) {
+        Py_Finalize();
+    }
+
     /* Do python and module init */
     PyImport_AppendInittab("robotpy_sim_core", PyInit_robotpy_sim_core);
     PyImport_AppendInittab("log_interceptor", PyInit_log_interceptor);
 
     Py_Initialize();
 
-    PyObject* sim_core_module = PyImport_ImportModule("robotpy_sim_core");
-    PyObject* interceptor_module = PyImport_ImportModule("log_interceptor");
+    debug_log("Python interpreter initialized, importing modules...");
+
+    sim_core_module = PyImport_ImportModule("robotpy_sim_core");
+    if(sim_core_module == NULL) {
+        if(PyErr_Occurred())
+            PyErr_Print();
+        debug_log("Cannot import robotpy_sim_core module");
+
+        ret = -3;
+        goto out;
+    }
+
+    interceptor_module = PyImport_ImportModule("log_interceptor");
+    if(interceptor_module == NULL) {
+        if(PyErr_Occurred())
+            PyErr_Print();
+        debug_log("Cannot import log_interceptor module");
+
+        ret = -4;
+        goto out;
+    }
 
     /* Load the specified python file */
-    PyObject* robot_filename = PyUnicode_DecodeFSDefault(robot_file);
-    PyObject* robot_cls = load_robot_class(robot_filename);
+    robot_filename = PyUnicode_DecodeFSDefault(robot_file);
+    if(robot_filename == NULL) {
+        if(PyErr_Occurred())
+            PyErr_Print();
+        debug_log("Cannot decode robot script filename");
+        ret = -2;
+        goto out;
+    }
 
-    Py_DECREF(robot_filename);
+    robot_cls = load_robot_class(robot_filename);
 
     if(robot_cls != NULL) {
         /* call noui_sim.initialize_robot with the loaded robot class */
@@ -103,13 +140,17 @@ int CALL_CONV load_robot(const char* robot_file) {
         if(PyErr_Occurred())
             PyErr_Print();
         debug_log("Cannot find Robot class in file \"%s\"\n", robot_file);
-        return -1;
+
+        ret = -1;
+        goto out;
     }
 
-    Py_DECREF(interceptor_module);
-    Py_DECREF(sim_core_module);
+out:
+    Py_XDECREF(robot_filename);
+    Py_XDECREF(sim_core_module);
+    Py_XDECREF(interceptor_module);
 
-    return 0;
+    return ret;
 }
 
 /* Wraps tick_robot. */
@@ -118,14 +159,30 @@ void CALL_CONV robot_step() {
 }
 
 void CALL_CONV set_robot_mode(const char* mode, short enabled) {
-    PyObject* pMode = PyUnicode_DecodeUTF8(mode, strlen(mode), "strict");
-    PyObject* pEnabled = PyBool_FromLong(enabled);
+    PyObject *pMode = NULL, *pEnabled = NULL;
+
+    pMode = PyUnicode_DecodeUTF8(mode, strlen(mode), "strict");
+    if(pMode == NULL || !PyUnicode_Check(pMode)) {
+        if(PyErr_Occurred())
+            PyErr_Print();
+        debug_log("set_robot_mode: Could not decode mode");
+        goto out;
+    }
+
+    pEnabled = PyBool_FromLong(enabled);
+    if(pEnabled == NULL || !PyBool_Check(pEnabled)) {
+        if(PyErr_Occurred())
+            PyErr_Print();
+        debug_log("set_robot_mode: Got invalid value for enabled");
+        goto out;
+    }
 
     set_robot_mode_impl(pMode, pEnabled);
 
     if(PyErr_Occurred())
         PyErr_Print();
 
+out:
     Py_XDECREF(pMode);
     Py_XDECREF(pEnabled);
 }
@@ -135,49 +192,58 @@ void CALL_CONV set_joystick_axis(int stick, int axis, float value) {
 }
 
 void CALL_CONV set_joystick_button(int stick, int btn, short value) {
-    PyObject* pValue = PyBool_FromLong(value);
+    PyObject* pValue = NULL;
+    pValue = PyBool_FromLong(value);
 
-    set_joystick_button_impl(stick, btn, pValue);
+    if(pValue != NULL && PyBool_Check(pValue)) {
+        set_joystick_button_impl(stick, btn, pValue);
+    } else {
+        if(PyErr_Occurred())
+            PyErr_Print();
+        debug_log("set_joystick_button: Invalid value passed for \'value\'");
+    }
 
     Py_XDECREF(pValue);
 }
 
 /* Gets the PWM output value for a particular channel from hal_data. */
 double CALL_CONV get_pwm_value(int channel) {
-    PyObject* pwmDict = get_dict_in_hal_data("pwm", channel);
+    PyObject *pwmDict = NULL, *pValue = NULL;
+    double v = 0.0f;
+
+    pwmDict = get_dict_in_hal_data("pwm", channel);
 
     if(pwmDict != NULL) {
-        PyObject* pValue = PyMapping_GetItemString(pwmDict, "value");
-        Py_DECREF(pwmDict);
+        pValue = PyMapping_GetItemString(pwmDict, "value");
 
         if(pValue != NULL && PyFloat_Check(pValue)) {
-            double v = PyFloat_AsDouble(pValue);
-            Py_DECREF(pValue);
+            v = PyFloat_AsDouble(pValue);
 
-            if(!PyErr_Occurred()) {
-                return v;
-            } else {
+            if(PyErr_Occurred()) {
                 PyErr_Print();
-                debug_log("Error occured converting value for PWM channel %i", channel);
-                return 0.0f;
+                debug_log("get_pwm_value: Error occured converting value for PWM channel %i", channel);
+                v = 0;
             }
         } else {
-            Py_XDECREF(pValue);
-
             if(PyErr_Occurred())
                 PyErr_Print();
-            debug_log("Could not get valid value for PWM channel %i", channel);
-            return 0.0f;
+            debug_log("get_pwm_value: Could not get valid value for PWM channel %i", channel);
+            v = 0;
         }
     } else {
         if(PyErr_Occurred())
             PyErr_Print();
-        debug_log("Could not get HAL data for PWM channel %i", channel);
-        return 0.0f;
+        debug_log("get_pwm_value: Could not get HAL data for PWM channel %i", channel);
+        v = 0;
     }
+
+    Py_XDECREF(pwmDict);
+    Py_XDECREF(pValue);
+    return v;
 }
 
 /* Wraps Py_Finalize. */
 void CALL_CONV finalize_python() {
     Py_Finalize();
+    logging_func = NULL;
 }
