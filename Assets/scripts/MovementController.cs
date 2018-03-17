@@ -18,6 +18,12 @@ public class MovementController : MonoBehaviour {
         rb2d = GetComponent<Rigidbody2D>();
     }
 
+    void Update()
+    {
+        animator.SetFloat("Left", left);
+        animator.SetFloat("Right", right);
+    }
+
 	void FixedUpdate () {
         //float left = Mathf.Clamp(vert + horiz, -1.0f, 1.0f);
         //float right = Mathf.Clamp(vert - horiz, -1.0f, 1.0f);
@@ -30,8 +36,5 @@ public class MovementController : MonoBehaviour {
 
         rb2d.velocity = transform.right * vfwd; // yes, right-- look at the red axis
         rb2d.angularVelocity = vrot;
-
-        animator.SetFloat("Left", left);
-        animator.SetFloat("Right", right);
     }
 }
