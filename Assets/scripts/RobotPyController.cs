@@ -75,9 +75,4 @@ public class RobotPyController : MonoBehaviour {
         move_ctrl.right = (float)pwm_right;
         blade_ctrl.motPwr = (float)pwm_blade;
 	}
-
-    void OnDisable()
-    {
-        finalize_python();
-    }
 }
