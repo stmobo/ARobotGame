@@ -88,17 +88,17 @@ int CALL_CONV load_robot(const char* robot_file) {
     PyObject *sim_core_module = NULL, *interceptor_module = NULL;
     PyObject *robot_filename = NULL, *robot_cls = NULL;
 
-    if(Py_IsInitialized()) {
-        Py_Finalize();
+    if(!Py_IsInitialized()) {
+        /* Do python and module init */
+        PyImport_AppendInittab("robotpy_sim_core", PyInit_robotpy_sim_core);
+        PyImport_AppendInittab("log_interceptor", PyInit_log_interceptor);
+
+        Py_Initialize();
+
+        debug_log("Python interpreter initialized, importing modules...");
+    } else {
+        debug_log("Python interpreter already initialized, importing modules...");
     }
-
-    /* Do python and module init */
-    PyImport_AppendInittab("robotpy_sim_core", PyInit_robotpy_sim_core);
-    PyImport_AppendInittab("log_interceptor", PyInit_log_interceptor);
-
-    Py_Initialize();
-
-    debug_log("Python interpreter initialized, importing modules...");
 
     sim_core_module = PyImport_ImportModule("robotpy_sim_core");
     if(sim_core_module == NULL) {
@@ -244,6 +244,8 @@ double CALL_CONV get_pwm_value(int channel) {
 
 /* Wraps Py_Finalize. */
 void CALL_CONV finalize_python() {
+    debug_log("Cleaning up robotpy_sim_core...");
+
     Py_Finalize();
     logging_func = NULL;
 }
